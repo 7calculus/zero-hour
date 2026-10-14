@@ -1684,7 +1684,7 @@ async function createApp() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve(__dirname, "dist/public")));
-    app.get("*", (_req, res) => {
+    app.get("/{*splat}", (_req, res) => {
       res.sendFile(path.resolve(__dirname, "dist/public/index.html"));
     });
   }
