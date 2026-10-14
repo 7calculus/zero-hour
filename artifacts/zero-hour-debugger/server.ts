@@ -546,6 +546,8 @@ function getEventStatus(startAt: Date, now: Date): "not_scheduled" | "scheduled"
 }
 
 function getTeamStatus(team: Team, solvedCount: number, now: Date): "not_started" | "in_progress" | "complete" | "expired" | "disqualified" {
+  // Disqualification is permanent for the round: it must show before, during AND after the event.
+  if (team.disqualified) return "disqualified";
   // Team status follows the single organizer-controlled global round, not a per-team clock.
   if (now < eventStartAt) return "not_started";
   const globalDeadline = new Date(eventStartAt.getTime() + EVENT_DURATION_SECONDS * 1000);
