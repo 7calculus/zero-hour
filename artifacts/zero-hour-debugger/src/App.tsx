@@ -708,6 +708,8 @@ function OrganizerDashboard({ onExit, isDemoAuth = false }: { onExit?: () => voi
   const [importResult,setImportResult]=useState<Awaited<ReturnType<ReturnType<typeof useImportOrganizerTeams>['mutateAsync']>>|null>(null);
   const [startAt,setStartAt]=useState('');
   const [exportError,setExportError]=useState('');
+  const [organizerNow,setOrganizerNow]=useState(Date.now());
+  useEffect(()=>{const timer=window.setInterval(()=>setOrganizerNow(Date.now()),1000);return()=>window.clearInterval(timer);},[]);
   const summary=useGetOrganizerSummary({query:{queryKey:getGetOrganizerSummaryQueryKey(),refetchInterval:10000}});
   const params=useMemo(()=>({search:search.trim()||undefined,status:status as any,sort}),[search,status,sort]);
   const participants=useGetOrganizerParticipants(params,{query:{queryKey:getGetOrganizerParticipantsQueryKey(params),refetchInterval:10000}});
@@ -715,7 +717,29 @@ function OrganizerDashboard({ onExit, isDemoAuth = false }: { onExit?: () => voi
   const attemptTimeline=expandedParticipant?.questions.flatMap(question=>(question.attemptLog??[]).map((attempt,index)=>({questionId:question.questionId,attempt,index})))??[];
   const importTeams=useImportOrganizerTeams();
   const setEvent=useSetOrganizerEvent();
+  const [extendingTime,setExtendingTime]=useState(false);
   const csvExport=useExportOrganizerCsv({query:{queryKey:getExportOrganizerCsvQueryKey(),enabled:false}});
+  const extendTime=async()=>{
+    if(summary.data?.event.status!=='running'||extendingTime)return;
+    setExtendingTime(true);
+    try{
+      const response=await fetch('/api/organizer/extend-time',{method:'POST',headers:{'Content-Type':'application/json'}});
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(result.error||'Could not extend the event timer.');
+      await Promise.all([
+        client.invalidateQueries({queryKey:getGetOrganizerSummaryQueryKey()}),
+        client.invalidateQueries({queryKey:getGetCompetitionQueryKey()}),
+        client.invalidateQueries({queryKey:getGetOrganizerParticipantsQueryKey()}),
+        client.invalidateQueries({queryKey:getGetLeaderboardQueryKey()}),
+        client.invalidateQueries({queryKey:getGetParticipantDashboardQueryKey()}),
+      ]);
+      alert('Event timer extended by 5 minutes.');
+    }catch(e){
+      alert((e as Error).message||'Could not extend the event timer.');
+    }finally{
+      setExtendingTime(false);
+    }
+  };
   const startEvent=()=>{if(!startAt)return;setEvent.mutate({data:{startAt:new Date(startAt).toISOString()}},{onSuccess:()=>{void client.invalidateQueries({queryKey:getGetOrganizerSummaryQueryKey()});void client.invalidateQueries({queryKey:getGetCompetitionQueryKey()});void client.invalidateQueries({queryKey:getGetOrganizerParticipantsQueryKey()});void client.invalidateQueries({queryKey:getGetLeaderboardQueryKey()});void client.invalidateQueries({queryKey:getGetParticipantDashboardQueryKey()});alert('New global start time saved. All teams have been reset to NOT STARTED and the 15-minute round is reset.');}});};
   const importCsv=()=>{setImportResult(null);importTeams.mutate({data:{csv}},{onSuccess:(result)=>{setImportResult(result);setCsv('');void client.invalidateQueries({queryKey:getGetOrganizerSummaryQueryKey()});void client.invalidateQueries({queryKey:getGetOrganizerParticipantsQueryKey()});}});};
   const doExport=async()=>{setExportError('');try{const result=await csvExport.refetch();if(result.data){const blob=new Blob([result.data],{type:'text/csv;charset=utf-8'});const href=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=href;anchor.download='zero-hour-standings.csv';anchor.click();URL.revokeObjectURL(href);}}catch(e){setExportError((e as Error).message||'Export failed.');}};
@@ -743,7 +767,7 @@ function OrganizerDashboard({ onExit, isDemoAuth = false }: { onExit?: () => voi
       alert('Failed to reset round: ' + (e as Error).message);
     }
   }} data-testid="button-start-now">START 15-MIN ROUND NOW</button>
-</div></div><div className="mono mt-4 grid grid-cols-2 gap-3 text-[10px] text-[#84928a]"><span>START <b className="ml-2 font-normal text-[#bdcbc2]">{summary.data.event.startAt?new Date(summary.data.event.startAt).toLocaleString():'Not scheduled'}</b></span><span>DURATION <b className="ml-2 font-normal text-[#bdcbc2]">{Math.floor(summary.data.event.durationSeconds/60)} min</b></span></div>{setEvent.isError&&<p role="alert" className="mt-3 text-xs text-[#ef978c]">{(setEvent.error as Error)?.message||'Could not set event schedule.'}</p>}</section>
+</div></div><div className="mt-4 flex flex-wrap items-center justify-between gap-3"><div className="mono grid grid-cols-1 gap-3 text-[10px] text-[#84928a] sm:grid-cols-3"><span>START <b className="ml-2 font-normal text-[#bdcbc2]">{summary.data.event.startAt?new Date(summary.data.event.startAt).toLocaleString():'Not scheduled'}</b></span><span>DURATION <b className="ml-2 font-normal text-[#bdcbc2]">{Math.floor(summary.data.event.durationSeconds/60)} min</b></span><span>LIVE TIMER <b className={`ml-2 text-base font-semibold ${summary.data.event.status==='running'?'text-[#68e791]':summary.data.event.status==='ended'?'text-[#ef978c]':'text-[#bdcbc2]'}`}>{summary.data.event.startAt?countdown(new Date(new Date(summary.data.event.startAt).getTime()+summary.data.event.durationSeconds*1000).toISOString(),organizerNow):'--:--'}</b></span></div><button className="btn btn-cyan" onClick={extendTime} disabled={summary.data.event.status!=='running'||extendingTime} data-testid="button-extend-time">{extendingTime?'ADDING TIME…':'+5 MIN'}</button></div>{setEvent.isError&&<p role="alert" className="mt-3 text-xs text-[#ef978c]">{(setEvent.error as Error)?.message||'Could not set event schedule.'}</p>}</section>
        <section className="panel p-5"><div className="mb-4 flex items-center justify-between"><h2 className="eyebrow flex items-center gap-2"><FileUp size={14}/> REGISTER TEAMS</h2><span className="mono text-[9px] text-[#74837a]">CSV IMPORT</span></div><textarea className="field mono min-h-[86px] resize-y text-[10px]" placeholder="Team ID,Team Name,Participant Names,Access Code" value={csv} onChange={e=>setCsv(e.target.value)} data-testid="input-team-csv"/><div className="mt-2 mono text-[9px] text-[#78867e]">Access Code is optional; omitted codes are generated and shown once.</div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><label className="btn cursor-pointer !min-h-[36px]"><FileUp size={13}/> CHOOSE CSV<input className="sr-only" type="file" accept=".csv,text/csv" onChange={onFile} data-testid="input-team-csv-file"/></label><button className="btn btn-primary" disabled={!csv.trim()||importTeams.isPending} onClick={importCsv} data-testid="button-import-csv">{importTeams.isPending?'IMPORTING…':'IMPORT TEAMS'}</button></div>{importTeams.isError&&<p role="alert" className="mt-3 text-xs text-[#ef978c]">{(importTeams.error as Error)?.message||'Import failed.'}</p>}{importResult&&<div className="mt-3 rounded border border-[#315b3e] bg-[#132019] p-3" role="status"><p className="mono text-[10px] text-[#65e58d]">{importResult.imported} TEAMS REGISTERED — ACCESS CODES (SHOWN ONCE)</p><div className="mt-2 max-h-28 overflow-auto">{importResult.teams.map((t, idx)=><div key={`imp-${t.teamId}-${idx}`} className="mono flex justify-between gap-4 py-1 text-[10px] text-[#c2d2c8]"><span>{t.teamName} / {t.teamId}</span><strong className="text-[#83eaa2]">{t.accessCode}</strong></div>)}</div><p className="mt-2 text-[9px] text-[#839189]">Distribute these codes securely to registered teams.</p></div>}</section>
     </div>
     <section className="panel overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#293530] p-4"><div><h2 className="eyebrow flex items-center gap-2"><Users size={14}/> PARTICIPANT SCOREBOARD</h2><p className="mono mt-1 text-[9px] text-[#78867e]">LIVE DETAIL FROM THE COMPETITION SERVER</p></div><div className="flex flex-wrap gap-2"><input className="field !w-[190px] !py-2 text-xs" placeholder="Search team or ID" value={search} onChange={e=>setSearch(e.target.value)} aria-label="Search teams" data-testid="input-search-participants"/><select className="field !w-auto !py-2 text-xs" value={status} onChange={e=>setStatus(e.target.value as typeof status)} aria-label="Filter by status" data-testid="select-participant-status">{[['all','All statuses'],['in_progress','In progress'],['complete','Complete'],['expired','Expired'],['not_started','Not started'],['disqualified','Disqualified']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><select className="field !w-auto !py-2 text-xs" value={sort} onChange={e=>setSort(e.target.value as typeof sort)} aria-label="Sort participants" data-testid="select-participant-sort"><option value="score">Sort: score</option><option value="team">Sort: team</option><option value="completion">Sort: completion</option></select></div></div>

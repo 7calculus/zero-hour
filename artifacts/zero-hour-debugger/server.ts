@@ -40,6 +40,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = "0.0.0.0";
 const SERVER_BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const EVENT_DURATION_SECONDS = 15 * 60; // 15 minutes
+let eventDurationSeconds = EVENT_DURATION_SECONDS;
 
 // 5 Debugging Challenges
 interface Challenge {
@@ -539,7 +540,7 @@ const sessions = new Map<string, string>();
 
 function getEventStatus(startAt: Date, now: Date): "not_scheduled" | "scheduled" | "running" | "ended" {
   if (!startAt) return "not_scheduled";
-  const deadline = new Date(startAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+  const deadline = new Date(startAt.getTime() + eventDurationSeconds * 1000);
   if (now < startAt) return "scheduled";
   if (now >= deadline) return "ended";
   return "running";
@@ -550,7 +551,7 @@ function getTeamStatus(team: Team, solvedCount: number, now: Date): "not_started
   if (team.disqualified) return "disqualified";
   // Team status follows the single organizer-controlled global round, not a per-team clock.
   if (now < eventStartAt) return "not_started";
-  const globalDeadline = new Date(eventStartAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+  const globalDeadline = new Date(eventStartAt.getTime() + eventDurationSeconds * 1000);
   if (now >= globalDeadline) return solvedCount === 5 ? "complete" : "expired";
   if (team.disqualified) return "disqualified";
   if (solvedCount === 5) return "complete";
@@ -558,7 +559,7 @@ function getTeamStatus(team: Team, solvedCount: number, now: Date): "not_started
 }
 
 function isOutsideGlobalRound(now = new Date()): boolean {
-  const deadline = new Date(eventStartAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+  const deadline = new Date(eventStartAt.getTime() + eventDurationSeconds * 1000);
   return now < eventStartAt || now >= deadline;
 }
 
@@ -754,7 +755,7 @@ function buildParticipantDashboard(teamId: string) {
       participantNames: [normId],
       accessCode: UNIVERSAL_ACCESS_CODE,
       startedAt: new Date().toISOString(),
-      deadline: new Date(Date.now() + EVENT_DURATION_SECONDS * 1000).toISOString(),
+      deadline: new Date(Date.now() + eventDurationSeconds * 1000).toISOString(),
     };
     teamsMap.set(normId, team);
   }
@@ -767,7 +768,7 @@ function buildParticipantDashboard(teamId: string) {
 
   // Every team uses the organizer's shared start time and shared deadline.
   const teamStartAt = eventStartAt;
-  const teamDeadline = new Date(eventStartAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+  const teamDeadline = new Date(eventStartAt.getTime() + eventDurationSeconds * 1000);
   const isBeforeStart = now < teamStartAt;
   const isExpired = now.getTime() >= teamDeadline.getTime();
   const evStatus = isBeforeStart ? "scheduled" : (isExpired ? "ended" : "running");
@@ -838,11 +839,11 @@ async function createApp() {
   api.get("/competition", (_req: Request, res: Response) => {
     const now = new Date();
     const startAt = eventStartAt;
-    const deadline = new Date(startAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+    const deadline = new Date(startAt.getTime() + eventDurationSeconds * 1000);
 
     res.json({
       title: "ZERO HOUR — DEBUGGER GAUNTLET",
-      durationSeconds: EVENT_DURATION_SECONDS,
+      durationSeconds: eventDurationSeconds,
       serverNow: now.toISOString(),
       startAt: startAt.toISOString(),
       deadline: deadline.toISOString(),
@@ -1311,7 +1312,7 @@ async function createApp() {
 
       const now = new Date();
       const startAt = eventStartAt;
-      const deadline = new Date(startAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+      const deadline = new Date(startAt.getTime() + eventDurationSeconds * 1000);
 
       if (now < startAt) {
         res.status(403).json({ error: "The official challenge window has not started yet." });
@@ -1403,7 +1404,7 @@ async function createApp() {
   api.get("/organizer/summary", requireOrganizer, (_req: Request, res: Response) => {
     const now = new Date();
     const startAt = eventStartAt;
-    const deadline = new Date(startAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+    const deadline = new Date(startAt.getTime() + eventDurationSeconds * 1000);
 
     const teamList = Array.from(teamsMap.keys());
     let startedCount = 0;
@@ -1434,7 +1435,7 @@ async function createApp() {
       event: {
         startAt: startAt.toISOString(),
         deadline: deadline.toISOString(),
-        durationSeconds: EVENT_DURATION_SECONDS,
+        durationSeconds: eventDurationSeconds,
         status: getEventStatus(startAt, now),
       },
     });
@@ -1629,7 +1630,8 @@ async function createApp() {
     api.post("/organizer/reset-now", async (_req: Request, res: Response) => {
     const now = new Date();
     eventStartAt = now;
-    const deadlineIso = new Date(now.getTime() + EVENT_DURATION_SECONDS * 1000).toISOString();
+    eventDurationSeconds = EVENT_DURATION_SECONDS;
+    const deadlineIso = new Date(now.getTime() + eventDurationSeconds * 1000).toISOString();
     resetAllTeamsForNewRound();
     await persistLeaderboardSnapshot();
     console.log("[ZERO HOUR] 15-Minute round restarted for all teams at", now.toISOString());
@@ -1640,6 +1642,24 @@ async function createApp() {
       message: "15-minute round successfully started now for all teams."
     });
   });
+  api.post("/organizer/extend-time", requireOrganizer, (req: Request, res: Response) => {
+    const now = new Date();
+    if (getEventStatus(eventStartAt, now) !== "running") {
+      res.status(409).json({ error: "The event timer can only be extended while the event is running." });
+      return;
+    }
+
+    eventDurationSeconds += 5 * 60;
+    const deadline = new Date(eventStartAt.getTime() + eventDurationSeconds * 1000);
+    res.json({
+      success: true,
+      startAt: eventStartAt.toISOString(),
+      deadline: deadline.toISOString(),
+      durationSeconds: eventDurationSeconds,
+      status: getEventStatus(eventStartAt, now),
+    });
+  });
+
   api.put("/organizer/event", requireOrganizer, (req: Request, res: Response) => {
     const { startAt } = req.body || {};
     if (!startAt) {
@@ -1654,16 +1674,17 @@ async function createApp() {
     }
 
     eventStartAt = parsedStartAt;
+    eventDurationSeconds = EVENT_DURATION_SECONDS;
     // A newly configured global start time always begins a fresh round for every team.
     // Keep team accounts/access codes, but clear all progress and statuses.
     resetAllTeamsForNewRound();
     const now = new Date();
 
-    const deadline = new Date(eventStartAt.getTime() + EVENT_DURATION_SECONDS * 1000);
+    const deadline = new Date(eventStartAt.getTime() + eventDurationSeconds * 1000);
     res.json({
       startAt: eventStartAt.toISOString(),
       deadline: deadline.toISOString(),
-      durationSeconds: EVENT_DURATION_SECONDS,
+      durationSeconds: eventDurationSeconds,
       status: getEventStatus(eventStartAt, now),
     });
   });
